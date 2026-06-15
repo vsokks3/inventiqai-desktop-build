@@ -27,8 +27,6 @@ jobs:
     runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || 'windows-latest' }}
 
     steps:
-      # ── Checkout source repos ────────────────────────────────────────────
-
       - name: Checkout inventiqai-desktop
         if: inputs.app == 'inventiqai-desktop'
         uses: actions/checkout@v4
@@ -37,8 +35,6 @@ jobs:
           token: ${{ secrets.MONOREPO_TOKEN }}
           path: inventiqai-desktop
 
-      # inventiqai-desktop depends on inventiqai/ as its frontend
-      # (tauri.conf.json: frontendDist ../../inventiqai/dist)
       - name: Checkout inventiqai (shared frontend)
         if: inputs.app == 'inventiqai-desktop'
         uses: actions/checkout@v4
@@ -55,25 +51,18 @@ jobs:
           token: ${{ secrets.MONOREPO_TOKEN }}
           path: inventiqai-master
 
-      # ── Toolchain ────────────────────────────────────────────────────────
-
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Setup Rust — macOS (aarch64 + x86_64 for universal binary)
+      - name: Setup Rust (macos - aarch64 + x86_64 for universal binary)
         if: inputs.platform == 'macos'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
-      - name: Setup Rust — Windows
+      - name: Setup Rust (windows)
         if: inputs.platform == 'windows'
         uses: dtolnay/rust-toolchain@stable
 
@@ -81,8 +70,6 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: ${{ inputs.app }}/src-tauri
-
-      # ── Install dependencies ─────────────────────────────────────────────
 
       - name: Install inventiqai frontend deps
         if: inputs.app == 'inventiqai-desktop'
@@ -93,24 +80,19 @@ jobs:
         run: npm ci
         working-directory: ${{ inputs.app }}
 
-      # ── Version patch ────────────────────────────────────────────────────
-
       - name: Patch version in tauri.conf.json
         shell: bash
         run: |
-          VERSION="${{ inputs.version }}"
           node -e "
             const fs = require('fs');
-            const path = '${{ inputs.app }}/src-tauri/tauri.conf.json';
-            const cfg = JSON.parse(fs.readFileSync(path, 'utf8'));
-            cfg.version = '$VERSION';
-            fs.writeFileSync(path, JSON.stringify(cfg, null, 2));
-            console.log('Patched version to', '$VERSION');
+            const p = '${{ inputs.app }}/src-tauri/tauri.conf.json';
+            const cfg = JSON.parse(fs.readFileSync(p, 'utf8'));
+            cfg.version = '${{ inputs.version }}';
+            fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+            console.log('Patched version to ${{ inputs.version }}');
           "
 
-      # ── Build ────────────────────────────────────────────────────────────
-
-      - name: Build — macOS universal binary
+      - name: Build (macos universal binary)
         if: inputs.platform == 'macos'
         run: npm run tauri:build:supabase -- --target universal-apple-darwin
         working-directory: ${{ inputs.app }}
@@ -118,15 +100,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Build — Windows
+      - name: Build (windows)
         if: inputs.platform == 'windows'
         run: npm run tauri:build:supabase
         working-directory: ${{ inputs.app }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-
-      # ── Collect artifacts + latest.json ──────────────────────────────────
 
       - name: Collect artifacts and generate latest.json
         id: artifacts
@@ -153,10 +133,10 @@ jobs:
             [ -d "$BUNDLE_DIR/macos" ] && cp "$BUNDLE_DIR/macos"/*.tar.gz     "$OUT_DIR/" 2>/dev/null || true
             [ -d "$BUNDLE_DIR/macos" ] && cp "$BUNDLE_DIR/macos"/*.tar.gz.sig "$OUT_DIR/" 2>/dev/null || true
             SIG_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.tar.gz.sig" | head -1)
-            TAR_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.tar.gz"     | head -1)
+            TAR_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.tar.gz" | head -1)
             [ -z "$SIG_FILE" ] && echo "ERROR: No .tar.gz.sig found" && exit 1
             PLATFORM_KEY="darwin-universal"
-            DOWNLOAD_URL="https://github.com/vsokks3/inventiqai-desktop-build/releases/download/$TAG/$(basename "$TAR_FILE")"
+            ARTIFACT_FILE="$TAR_FILE"
           else
             BUNDLE_DIR="$APP/src-tauri/target/release/bundle"
             [ -d "$BUNDLE_DIR/nsis" ] && cp "$BUNDLE_DIR/nsis"/*.exe          "$OUT_DIR/" 2>/dev/null || true
@@ -166,76 +146,52 @@ jobs:
             [ -d "$BUNDLE_DIR/msi" ]  && cp "$BUNDLE_DIR/msi"/*.msi.zip       "$OUT_DIR/" 2>/dev/null || true
             [ -d "$BUNDLE_DIR/msi" ]  && cp "$BUNDLE_DIR/msi"/*.msi.zip.sig   "$OUT_DIR/" 2>/dev/null || true
             SIG_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.nsis.zip.sig" | head -1)
-            ZIP_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.nsis.zip"     | head -1)
+            ARTIFACT_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.nsis.zip" | head -1)
             if [ -z "$SIG_FILE" ]; then
               SIG_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.msi.zip.sig" | head -1)
-              ZIP_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.msi.zip"     | head -1)
+              ARTIFACT_FILE=$(find "$OUT_DIR" -maxdepth 1 -name "*.msi.zip" | head -1)
             fi
             [ -z "$SIG_FILE" ] && echo "ERROR: No .sig file found" && exit 1
             PLATFORM_KEY="windows-x86_64"
-            DOWNLOAD_URL="https://github.com/vsokks3/inventiqai-desktop-build/releases/download/$TAG/$(basename "$ZIP_FILE")"
           fi
 
-          # Merge with existing latest.json so both platforms coexist
+          SIGNATURE=$(cat "$SIG_FILE")
+          DOWNLOAD_URL="https://github.com/vsokks3/inventiqai-desktop-build/releases/download/$TAG/$(basename "$ARTIFACT_FILE")"
+
+          # Fetch existing latest.json and merge this platform in (so Windows + macOS coexist)
           gh release download "$TAG" \
             --repo "vsokks3/inventiqai-desktop-build" \
             -p "latest.json" -D /tmp/existing-release 2>/dev/null || true
 
-          export PY_VERSION="$VERSION"
-          export PY_TAG="$TAG"
-          export PY_PUB_DATE="$PUB_DATE"
-          export PY_PLATFORM_KEY="$PLATFORM_KEY"
-          export PY_SIG_FILE="$SIG_FILE"
-          export PY_DOWNLOAD_URL="$DOWNLOAD_URL"
-          export PY_OUT_DIR="$OUT_DIR"
+          PLATFORM_ENTRY=$(jq -n \
+            --arg sig "$SIGNATURE" \
+            --arg url "$DOWNLOAD_URL" \
+            '{signature: $sig, url: $url}')
 
-          python3 <<'PYEOF'
-import json, os
+          if [ -f /tmp/existing-release/latest.json ]; then
+            jq --arg version "$VERSION" \
+               --arg pub_date "$PUB_DATE" \
+               --arg key "$PLATFORM_KEY" \
+               --argjson entry "$PLATFORM_ENTRY" \
+               '.version = $version | .pub_date = $pub_date | .platforms[$key] = $entry' \
+               /tmp/existing-release/latest.json > "$OUT_DIR/latest.json"
+          else
+            jq -n \
+              --arg version "$VERSION" \
+              --arg tag "$TAG" \
+              --arg pub_date "$PUB_DATE" \
+              --arg key "$PLATFORM_KEY" \
+              --argjson entry "$PLATFORM_ENTRY" \
+              '{version: $version, notes: ("Release " + $tag), pub_date: $pub_date, platforms: {($key): $entry}}' \
+              > "$OUT_DIR/latest.json"
+          fi
 
-existing_path = '/tmp/existing-release/latest.json'
-version      = os.environ["PY_VERSION"]
-tag          = os.environ["PY_TAG"]
-pub_date     = os.environ["PY_PUB_DATE"]
-platform_key = os.environ["PY_PLATFORM_KEY"]
-sig_file     = os.environ["PY_SIG_FILE"]
-download_url = os.environ["PY_DOWNLOAD_URL"]
-out_dir      = os.environ["PY_OUT_DIR"]
-
-with open(sig_file) as f:
-    signature = f.read().strip()
-
-try:
-    with open(existing_path) as f:
-        data = json.load(f)
-except Exception:
-    data = {
-        "version": version,
-        "notes": f"See https://github.com/vsokks3/inventiqai-desktop-build/releases/tag/{tag} for release notes.",
-        "pub_date": pub_date,
-        "platforms": {}
-    }
-
-data["version"] = version
-data["pub_date"] = pub_date
-data.setdefault("platforms", {})[platform_key] = {
-    "signature": signature,
-    "url": download_url
-}
-
-with open(f"{out_dir}/latest.json", "w") as f:
-    json.dump(data, f, indent=2)
-
-print("--- latest.json ---")
-with open(f"{out_dir}/latest.json") as f:
-    print(f.read())
-PYEOF
-
+          echo "--- latest.json ---"
+          cat "$OUT_DIR/latest.json"
           echo "TAG=$TAG" >> "$GITHUB_OUTPUT"
           echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
           echo "--- Artifacts ---"
           ls -lh "$OUT_DIR/"
-
-      # ── Publish release ───────────────────────────────────────────────────
 
       - name: Publish to inventiqai-desktop-build
         shell: bash
@@ -245,7 +201,6 @@ PYEOF
           APP="${{ inputs.app }}"
           TAG="${{ steps.artifacts.outputs.TAG }}"
           VERSION="${{ steps.artifacts.outputs.VERSION }}"
-          PLATFORM="${{ inputs.platform }}"
 
           if [ "$APP" = "inventiqai-desktop" ]; then
             TITLE="InventiqAI Desktop v$VERSION"
@@ -257,7 +212,7 @@ PYEOF
             gh release create "$TAG" \
               --repo "vsokks3/inventiqai-desktop-build" \
               --title "$TITLE" \
-              --notes "$TITLE — $PLATFORM build"
+              --notes "$TITLE - ${{ inputs.platform }} build"
           fi
 
           gh release upload "$TAG" release-artifacts/* \
