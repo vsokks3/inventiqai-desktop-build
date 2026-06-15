@@ -25,6 +25,8 @@ on:
 jobs:
   build:
     runs-on: ${{ inputs.platform == 'macos' && 'macos-latest' || 'windows-latest' }}
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout inventiqai-desktop
